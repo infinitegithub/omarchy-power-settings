@@ -1,0 +1,22 @@
+#!/bin/bash
+# Remove Power Settings lid bindings and restore Omarchy defaults
+set -euo pipefail
+
+BINDINGS_FILE="${HOME}/.config/hypr/bindings.lua"
+START_MARKER="-- [power-settings-bindings]"
+END_MARKER="-- [/power-settings-bindings]"
+
+if [[ -f "$BINDINGS_FILE" ]] && grep -q -F -e "$START_MARKER" "$BINDINGS_FILE"; then
+  sed -i "/$START_MARKER/,/$END_MARKER/d" "$BINDINGS_FILE"
+fi
+
+if [[ -z ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
+  SIG_PATH=$(ls -td /run/user/"$(id -u)"/hypr/* 2>/dev/null | grep -v '\.lock$' | head -n1 || true)
+  if [[ -n $SIG_PATH ]]; then
+    export HYPRLAND_INSTANCE_SIGNATURE="$(basename "$SIG_PATH")"
+  fi
+fi
+
+if [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
+  hyprctl reload >/dev/null 2>&1 || true
+fi

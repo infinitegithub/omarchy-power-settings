@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "power-settings",
+  "name": "Power Settings",
+  "version": "1.0.0",
+  "author": "Es Sadik Sanhaji",
+  "license": "MIT",
+  "homepage": "https://github.com/infinitegithub/omarchy-power-settings",
+  "repository": "https://github.com/infinitegithub/omarchy-power-settings",
+  "description": "Control what happens when you close your laptop lid (Sleep, Lock, Screen Off, Ignore) with 1-click toggles, AC vs Battery rules, Stay Awake mode, and live battery telemetry.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Power Settings",
+    "description": "Lid-close actions (Sleep, Lock, Screen Off, Ignore), Stay Awake toggle, and battery telemetry",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

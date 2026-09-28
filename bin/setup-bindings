@@ -1,0 +1,50 @@
+#!/bin/bash
+# Automatically configure laptop lid-close behavior for Power Settings in Omarchy
+set -euo pipefail
+
+BINDINGS_FILE="${HOME}/.config/hypr/bindings.lua"
+START_MARKER="-- [power-settings-bindings]"
+END_MARKER="-- [/power-settings-bindings]"
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LID_HANDLER="$DIR/lid-handler.sh"
+
+mkdir -p "$(dirname "$BINDINGS_FILE")"
+
+if [[ ! -f "$BINDINGS_FILE" ]]; then
+  touch "$BINDINGS_FILE"
+fi
+
+# Recover HYPRLAND_INSTANCE_SIGNATURE if missing from environment
+if [[ -z ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
+  SIG_PATH=$(ls -td /run/user/"$(id -u)"/hypr/* 2>/dev/null | grep -v '\.lock$' | head -n1 || true)
+  if [[ -n $SIG_PATH ]]; then
+    export HYPRLAND_INSTANCE_SIGNATURE="$(basename "$SIG_PATH")"
+  fi
+fi
+
+# Clean up any previous or existing manual lid bindings
+if grep -q -F -e "$START_MARKER" "$BINDINGS_FILE"; then
+  # Remove previous block
+  sed -i "/$START_MARKER/,/$END_MARKER/d" "$BINDINGS_FILE"
+fi
+
+# Remove any old un-marked duplicate lines if present
+sed -i '/switch:on:Lid Switch/d' "$BINDINGS_FILE"
+sed -i '/switch:off:Lid Switch/d' "$BINDINGS_FILE"
+
+# Append the isolated configuration block
+cat >> "$BINDINGS_FILE" <<BLOCK
+
+$START_MARKER
+-- Laptop lid switch management handled by Power Settings
+hl.unbind("switch:on:Lid Switch")
+o.bind("switch:on:Lid Switch", nil, "$LID_HANDLER", { locked = true })
+hl.unbind("switch:off:Lid Switch")
+o.bind("switch:off:Lid Switch", nil, "omarchy system wake", { locked = true })
+$END_MARKER
+BLOCK
+
+# Always reload Hyprland config dynamically so the binding takes effect immediately
+if [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]]; then
+  hyprctl reload >/dev/null 2>&1 || true
+fi

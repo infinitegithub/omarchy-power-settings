@@ -1,0 +1,5 @@
+.local/
+*.tmp*
+*.bak*
+__pycache__/
+*.log
