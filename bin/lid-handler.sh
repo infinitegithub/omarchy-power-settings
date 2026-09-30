@@ -5,12 +5,33 @@
 
 set -euo pipefail
 
+LOG_FILE="/tmp/omarchy-lid-handler.log"
 CONFIG_FILE="$HOME/.config/omarchy/power-management.json"
-STAY_AWAKE_FILE="$HOME/.local/state/omarchy/indicators/stay-awake"
+STATE_DIR="$HOME/.local/state/omarchy/indicators"
+STAY_AWAKE_FILE="$STATE_DIR/stay-awake"
 
-# 1. Verify the lid is actually closed
+log() {
+  local msg="$1"
+  local ts
+  ts="$(date '+%Y-%m-%d %H:%M:%S')"
+  echo "[$ts] $msg" >> "$LOG_FILE"
+  logger -t omarchy-lid-handler "$msg"
+}
+
+log "=== Lid close event received (PID: $$) ==="
+
+# 1. Verify the lid is actually closed (with slight debounce for ACPI status propagation)
 if type omarchy-hw-laptop-closed >/dev/null 2>&1; then
-  if ! omarchy-hw-laptop-closed; then
+  closed=false
+  for i in {1..3}; do
+    if omarchy-hw-laptop-closed; then
+      closed=true
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ "$closed" == "false" ]]; then
+    log "Lid switch reported closed, but ACPI / hardware reports lid is open. Ignoring event."
     exit 0
   fi
 fi
@@ -18,20 +39,13 @@ fi
 # 2. Check for connected external displays (clamshell mode)
 if type omarchy-hw-external-monitors >/dev/null 2>&1; then
   if omarchy-hw-external-monitors; then
-    # Clamshell mode: keep external display running, turn off internal
+    log "External display detected: applying Clamshell mode (disabling internal panel)."
     omarchy-hyprland-monitor-clamshell >/dev/null 2>&1 || true
     exit 0
   fi
 fi
 
-# 3. Check if Stay Awake is active
-if [[ -f "$STAY_AWAKE_FILE" ]]; then
-  # Inhibit sleep: adjust displays only
-  omarchy-hyprland-monitor-clamshell >/dev/null 2>&1 || true
-  exit 0
-fi
-
-# 4. Determine AC vs Battery power
+# 3. Determine AC vs Battery power
 on_battery=false
 if [[ -r /sys/class/power_supply/ADP1/online && "$(<"/sys/class/power_supply/ADP1/online")" == "1" ]]; then
   on_battery=false
@@ -49,15 +63,23 @@ else
   done
 fi
 
-# 5. Read configured lid actions
+log "Power source: on_battery=$on_battery"
+
+# 4. Read configured lid actions & stay-awake
 lid_action="suspend"
 separate_ac="false"
 lid_action_ac="lock"
+stay_awake=false
 
 if [[ -f "$CONFIG_FILE" ]]; then
   lid_action=$(jq -r '.lidAction // "suspend"' "$CONFIG_FILE" 2>/dev/null || echo "suspend")
   separate_ac=$(jq -r '.separateAcAction // false' "$CONFIG_FILE" 2>/dev/null || echo "false")
   lid_action_ac=$(jq -r '.lidActionAc // "lock"' "$CONFIG_FILE" 2>/dev/null || echo "lock")
+  stay_awake=$(jq -r '.stayAwake // false' "$CONFIG_FILE" 2>/dev/null || echo "false")
+fi
+
+if [[ -f "$STAY_AWAKE_FILE" ]]; then
+  stay_awake=true
 fi
 
 target_action="$lid_action"
@@ -65,27 +87,76 @@ if [[ "$on_battery" == "false" && "$separate_ac" == "true" ]]; then
   target_action="$lid_action_ac"
 fi
 
-# 6. Execute the target action
+log "Configured action: target_action=$target_action (on_battery=$on_battery, separate_ac=$separate_ac, stay_awake=$stay_awake)"
+
+# Helper functions for display & lock
+turn_display_off() {
+  log "Turning display off via omarchy-brightness-display off"
+  omarchy-brightness-display off >/dev/null 2>&1 || true
+}
+
+lock_screen() {
+  log "Locking screen via omarchy-system-lock"
+  omarchy-system-lock >/dev/null 2>&1 || true
+}
+
+# 5. Execute action based on target_action and stay_awake
+if [[ "$stay_awake" == "true" ]]; then
+  case "$target_action" in
+    suspend)
+      log "Stay Awake is active: inhibiting system suspend. Screen will lock and turn off."
+      lock_screen
+      turn_display_off
+      ;;
+    lock)
+      lock_screen
+      turn_display_off
+      ;;
+    display-off)
+      lock_screen
+      turn_display_off
+      ;;
+    ignore)
+      log "Stay Awake is active with action=ignore: turning display off."
+      turn_display_off
+      ;;
+    *)
+      lock_screen
+      turn_display_off
+      ;;
+  esac
+  log "Handler completed (Stay Awake path)."
+  exit 0
+fi
+
 case "$target_action" in
   suspend)
-    omarchy-system-lock >/dev/null 2>&1 || true
-    omarchy-hyprland-monitor-clamshell >/dev/null 2>&1 || true
+    log "Executing action: suspend"
+    lock_screen
+    turn_display_off
+    log "Invoking systemctl suspend..."
     systemctl suspend
     ;;
   lock)
-    omarchy-system-lock >/dev/null 2>&1 || true
-    omarchy-hyprland-monitor-clamshell >/dev/null 2>&1 || true
+    log "Executing action: lock"
+    lock_screen
+    turn_display_off
     ;;
   display-off)
-    omarchy-system-lock >/dev/null 2>&1 || true
-    hyprctl dispatch dpms off >/dev/null 2>&1 || true
+    log "Executing action: display-off"
+    lock_screen
+    turn_display_off
     ;;
   ignore)
-    omarchy-hyprland-monitor-clamshell >/dev/null 2>&1 || true
+    log "Executing action: ignore (keeping awake & unlocked, turning display off)"
+    turn_display_off
     ;;
   *)
-    # Fallback to standard Omarchy behavior
-    omarchy-system-lock >/dev/null 2>&1 || true
-    omarchy-hyprland-monitor-clamshell >/dev/null 2>&1 || true
+    log "Executing fallback action: suspend"
+    lock_screen
+    turn_display_off
+    systemctl suspend
     ;;
 esac
+
+log "Handler completed successfully."
